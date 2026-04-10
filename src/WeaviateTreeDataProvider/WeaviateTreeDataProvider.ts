@@ -3446,6 +3446,21 @@ export class WeaviateTreeDataProvider implements vscode.TreeDataProvider<Weaviat
       const candidates = findMultiTenantCandidates(this.collections[connectionId], objectCounts);
       this.mtCandidates[connectionId] = candidates;
 
+      // Keep the saved checks result in sync with the live collection state so
+      // the ClusterPanel banner and Checks tab reflect reality without requiring
+      // the user to manually click "Run Checks". This mirrors what runChecks()
+      // does, but runs automatically on every collection fetch so the tree badge
+      // and the panel banner are always in agreement.
+      const updatedResult: ChecksResult = {
+        timestamp: new Date().toISOString(),
+        multiTenancy: { groups: candidates, hasIssues: candidates.length > 0 },
+      };
+      await this.context.globalState.update(`checksResults.${connectionId}`, updatedResult);
+      ClusterPanel.getPanel(connectionId)?.postMessage({
+        command: 'checksResult',
+        result: updatedResult,
+      });
+
       // Refresh the tree view
       this.refresh();
 

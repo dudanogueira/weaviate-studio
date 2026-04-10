@@ -17,6 +17,7 @@ export class ClusterPanel {
     nodeStatusData: any;
     openClusterViewOnConnect?: boolean;
     checksResult?: any;
+    openTab?: string;
   } | null = null;
 
   private constructor(
@@ -125,6 +126,19 @@ export class ClusterPanel {
   }
 
   /**
+   * Requests a tab switch. For new panels (pending init not yet flushed) the switch
+   * is queued alongside the init payload so it isn't lost before the webview loads.
+   * For already-open panels it is sent immediately.
+   */
+  public setPendingTab(tab: string): void {
+    if (this._pendingInitData) {
+      this._pendingInitData.openTab = tab;
+    } else {
+      this.postMessage({ command: 'switchTab', tab });
+    }
+  }
+
+  /**
    * Disposes the panel
    */
   public dispose(): void {
@@ -161,6 +175,9 @@ export class ClusterPanel {
           openClusterViewOnConnect: this._pendingInitData.openClusterViewOnConnect,
           checksResult: this._pendingInitData.checksResult,
         });
+        if (this._pendingInitData.openTab) {
+          this.postMessage({ command: 'switchTab', tab: this._pendingInitData.openTab });
+        }
         // Keep a copy so repeated 'ready' from React StrictMode double-invoke still works.
         this._pendingInitData = null;
       }

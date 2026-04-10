@@ -1595,6 +1595,14 @@ export function activate(context: vscode.ExtensionContext) {
           vscode.window.showInformationMessage(
             `Collection "${item.collectionName}" deleted successfully`
           );
+          // Re-run checks if a previous result exists, so stale candidates are cleared.
+          if (weaviateTreeDataProvider.getLastChecksResult(item.connectionId)) {
+            const updatedResult = await weaviateTreeDataProvider.runChecks(item.connectionId);
+            ClusterPanel.getPanel(item.connectionId)?.postMessage({
+              command: 'checksResult',
+              result: updatedResult,
+            });
+          }
         } catch (error) {
           vscode.window.showErrorMessage(
             `Failed to delete collection: ${error instanceof Error ? error.message : String(error)}`
@@ -1634,6 +1642,14 @@ export function activate(context: vscode.ExtensionContext) {
         try {
           await weaviateTreeDataProvider.deleteAllCollections(item.connectionId);
           vscode.window.showInformationMessage('All collections deleted successfully');
+          // Re-run checks if a previous result exists, so stale candidates are cleared.
+          if (weaviateTreeDataProvider.getLastChecksResult(item.connectionId)) {
+            const updatedResult = await weaviateTreeDataProvider.runChecks(item.connectionId);
+            ClusterPanel.getPanel(item.connectionId)?.postMessage({
+              command: 'checksResult',
+              result: updatedResult,
+            });
+          }
         } catch (error) {
           vscode.window.showErrorMessage(
             `Failed to delete all collections: ${error instanceof Error ? error.message : String(error)}`
@@ -1828,9 +1844,9 @@ export function activate(context: vscode.ExtensionContext) {
         );
 
         // If a specific tab was requested (e.g. opening directly to the Checks tab),
-        // tell the webview to switch to it after the panel is shown.
+        // queue the switch so it's safe for both new and already-open panels.
         if (item.openTab) {
-          clusterPanel.postMessage({ command: 'switchTab', tab: item.openTab });
+          clusterPanel.setPendingTab(item.openTab);
         }
       } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';

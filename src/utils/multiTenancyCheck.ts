@@ -150,6 +150,10 @@ export function findMultiTenantCandidates(
 
     const properties = (col.schema?.properties as PropertyLike[] | undefined) ?? [];
     const hash = computeCollectionHash(properties);
+    // Skip collections with no properties — they have no meaningful schema to compare
+    if (!hash) {
+      continue;
+    }
     const entry: MtCollectionEntry = {
       name: col.label,
       objectCount: objectCounts?.[col.label] ?? 0,

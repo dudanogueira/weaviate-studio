@@ -253,13 +253,45 @@
   overflow: auto;
 }
 
-.loading,
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.loading-spinner {
+  animation: spin 1s linear infinite;
+  flex-shrink: 0;
+}
+
+.loading {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  height: 200px;
+  gap: 12px;
+  color: var(--vscode-descriptionForeground);
+}
+
 .no-data {
   display: flex;
   justify-content: center;
   align-items: center;
   height: 200px;
   color: var(--vscode-descriptionForeground);
+}
+
+.checks-running {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 20px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 13px;
 }
 
 /* Nodes List */

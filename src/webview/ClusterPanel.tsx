@@ -116,6 +116,22 @@ function ChecksView({ checksResult, isRunning, onRunChecks }: ChecksViewProps) {
         </button>
       </div>
 
+      {isRunning && (
+        <div className="checks-running">
+          <svg
+            className="loading-spinner"
+            width="20"
+            height="20"
+            viewBox="0 0 16 16"
+            fill="currentColor"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path d="M13.451 5.609l-.579-.939-1.068.812-.076.094c-.335.415-.927 1.341-1.124 2.876l-.021.165.033.163.071.345c0 1.654-1.346 3-3 3-.795 0-1.545-.311-2.107-.868-.563-.567-.873-1.317-.873-2.111 0-1.431 1.007-2.632 2.351-2.929v2.498l2.528-2.134-2.528-2.076v2.11C4.753 6.867 3 8.819 3 11.131c0 1.14.445 2.21 1.253 3.014.808.803 1.883 1.246 3.027 1.246 2.31 0 4.216-1.751 4.455-4.027.098-.858.451-1.935.832-2.489.167-.237.351-.469.555-.678l.131-.117zm-2.359.81c-.172-.268-.33-.518-.475-.748-1.303-2.066-2.916-2.758-4.093-2.758-1.087 0-2.1.563-2.7 1.5-.302.473-.5 1.013-.6 1.596l1.013.014c.087-.484.245-.95.465-1.371.437-.838 1.176-1.34 1.987-1.34.852 0 1.839.428 2.659 1.147.411.363.771.77 1.073 1.211.136.202.261.408.376.616.092-.085.184-.168.278-.25l.017-.017z" />
+          </svg>
+          <p>Running checks…</p>
+        </div>
+      )}
+
       {!checksResult && !isRunning && (
         <div className="checks-empty">
           <p>
@@ -582,9 +598,9 @@ function NodeComponent({
 // Collection View Component
 interface CollectionViewProps {
   nodeStatusData: Node[];
-  selectedNodeName: string | null;
+  selectedNodeNames: Set<string>;
   selectedShardName: string | null;
-  selectedCollectionName: string | null;
+  selectedCollectionNames: Set<string>;
   onNodeSelect: (nodeName: string) => void;
   onShardSelect: (shardName: string) => void;
   onCollectionSelect: (collectionName: string) => void;
@@ -602,9 +618,9 @@ interface CollectionData {
 
 function CollectionView({
   nodeStatusData,
-  selectedNodeName,
+  selectedNodeNames,
   selectedShardName,
-  selectedCollectionName,
+  selectedCollectionNames,
   onNodeSelect,
   onShardSelect,
   onCollectionSelect,
@@ -644,19 +660,18 @@ function CollectionView({
   }, [nodeStatusData]);
 
   const handleCollectionSelect = (collectionName: string) => {
-    onCollectionSelect(collectionName === selectedCollectionName ? '' : collectionName);
-    onNodeSelect(''); // Reset node selection
+    onCollectionSelect(collectionName);
   };
 
   const handleNodeSelectInCollection = (nodeName: string) => {
-    onNodeSelect(nodeName === selectedNodeName ? '' : nodeName);
+    onNodeSelect(nodeName);
     onShardSelect(''); // Reset shard selection
   };
 
   return (
     <div className="collections-list">
       {collections.map((collection) => {
-        const isCollectionSelected = selectedCollectionName === collection.name;
+        const isCollectionSelected = selectedCollectionNames.has(collection.name);
 
         // Check for READONLY shards in this collection
         const readonlyShards = collection.nodes.flatMap((node) =>
@@ -759,7 +774,7 @@ function CollectionView({
                   {collection.nodes
                     .sort((a, b) => a.nodeName.localeCompare(b.nodeName))
                     .map((nodeData) => {
-                      const isNodeSelected = selectedNodeName === nodeData.nodeName;
+                      const isNodeSelected = selectedNodeNames.has(nodeData.nodeName);
                       const nodeReadonlyShards = nodeData.shards.filter(
                         (shard) => shard.vectorIndexingStatus === 'READONLY'
                       );
@@ -827,9 +842,9 @@ function CollectionView({
 function ClusterPanelWebview() {
   const [nodeStatusData, setNodeStatusData] = useState<Node[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [selectedNodeName, setSelectedNodeName] = useState<string | null>(null);
+  const [selectedNodeNames, setSelectedNodeNames] = useState<Set<string>>(new Set());
   const [selectedShardName, setSelectedShardName] = useState<string | null>(null);
-  const [selectedCollectionName, setSelectedCollectionName] = useState<string | null>(null);
+  const [selectedCollectionNames, setSelectedCollectionNames] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [openClusterViewOnConnect, setOpenClusterViewOnConnect] = useState<boolean>(true);
   const [viewType, setViewType] = useState<'node' | 'collection' | 'checks'>('node');
@@ -909,10 +924,17 @@ function ClusterPanelWebview() {
           }
           break;
         }
-        case 'checksResult':
-          setChecksResult(message.result ?? null);
+        case 'checksResult': {
+          const newResult = message.result ?? null;
+          setChecksResult(newResult);
           setIsRunningChecks(false);
+          // Re-show the banner whenever fresh results arrive with issues,
+          // even if the user previously dismissed it.
+          if (newResult?.multiTenancy?.hasIssues) {
+            setChecksWarningDismissed(false);
+          }
           break;
+        }
         case 'switchTab':
           if (message.tab === 'node' || message.tab === 'collection' || message.tab === 'checks') {
             setViewType(message.tab);
@@ -958,7 +980,15 @@ function ClusterPanelWebview() {
   }, []);
 
   const handleNodeSelect = useCallback((nodeName: string) => {
-    setSelectedNodeName((prev) => (prev === nodeName ? null : nodeName));
+    setSelectedNodeNames((prev) => {
+      const next = new Set(prev);
+      if (next.has(nodeName)) {
+        next.delete(nodeName);
+      } else {
+        next.add(nodeName);
+      }
+      return next;
+    });
     setSelectedShardName(null);
   }, []);
 
@@ -967,8 +997,15 @@ function ClusterPanelWebview() {
   }, []);
 
   const handleCollectionSelect = useCallback((collectionName: string) => {
-    setSelectedCollectionName((prev) => (prev === collectionName ? null : collectionName));
-    setSelectedNodeName(null);
+    setSelectedCollectionNames((prev) => {
+      const next = new Set(prev);
+      if (next.has(collectionName)) {
+        next.delete(collectionName);
+      } else {
+        next.add(collectionName);
+      }
+      return next;
+    });
     setSelectedShardName(null);
   }, []);
 
@@ -1057,7 +1094,7 @@ function ClusterPanelWebview() {
                 <NodeComponent
                   key={node.name}
                   node={node}
-                  isSelected={selectedNodeName === node.name}
+                  isSelected={selectedNodeNames.has(node.name)}
                   onSelect={() => handleNodeSelect(node.name)}
                   selectedShardName={selectedShardName}
                   onShardSelect={handleShardSelect}
@@ -1072,16 +1109,26 @@ function ClusterPanelWebview() {
         ) : (
           <CollectionView
             nodeStatusData={filteredNodeStatusData}
-            selectedNodeName={selectedNodeName}
+            selectedNodeNames={selectedNodeNames}
             selectedShardName={selectedShardName}
-            selectedCollectionName={selectedCollectionName}
+            selectedCollectionNames={selectedCollectionNames}
             onNodeSelect={handleNodeSelect}
             onShardSelect={handleShardSelect}
             onCollectionSelect={handleCollectionSelect}
           />
         )
       ) : isLoading ? (
-        <div className="no-data">
+        <div className="loading">
+          <svg
+            className="loading-spinner"
+            width="24"
+            height="24"
+            viewBox="0 0 16 16"
+            fill="currentColor"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path d="M13.451 5.609l-.579-.939-1.068.812-.076.094c-.335.415-.927 1.341-1.124 2.876l-.021.165.033.163.071.345c0 1.654-1.346 3-3 3-.795 0-1.545-.311-2.107-.868-.563-.567-.873-1.317-.873-2.111 0-1.431 1.007-2.632 2.351-2.929v2.498l2.528-2.134-2.528-2.076v2.11C4.753 6.867 3 8.819 3 11.131c0 1.14.445 2.21 1.253 3.014.808.803 1.883 1.246 3.027 1.246 2.31 0 4.216-1.751 4.455-4.027.098-.858.451-1.935.832-2.489.167-.237.351-.469.555-.678l.131-.117zm-2.359.81c-.172-.268-.33-.518-.475-.748-1.303-2.066-2.916-2.758-4.093-2.758-1.087 0-2.1.563-2.7 1.5-.302.473-.5 1.013-.6 1.596l1.013.014c.087-.484.245-.95.465-1.371.437-.838 1.176-1.34 1.987-1.34.852 0 1.839.428 2.659 1.147.411.363.771.77 1.073 1.211.136.202.261.408.376.616.092-.085.184-.168.278-.25l.017-.017z" />
+          </svg>
           <p>Loading cluster data…</p>
         </div>
       ) : (
@@ -1090,12 +1137,13 @@ function ClusterPanelWebview() {
         </div>
       ),
     [
+      isLoading,
       nodeStatusData,
       filteredNodeStatusData,
       viewType,
-      selectedNodeName,
+      selectedNodeNames,
       selectedShardName,
-      selectedCollectionName,
+      selectedCollectionNames,
     ]
   );
 
@@ -1206,13 +1254,15 @@ function ClusterPanelWebview() {
       </div>
 
       <div className="cluster-content" ref={contentRef}>
-        {viewType !== 'checks' && !checksWarningDismissed && (
-          <ChecksWarningBanner
-            checksResult={checksResult}
-            onOpenChecks={() => setViewType('checks')}
-            onDismiss={() => setChecksWarningDismissed(true)}
-          />
-        )}
+        {viewType !== 'checks' &&
+          !checksWarningDismissed &&
+          checksResult?.multiTenancy?.hasIssues && (
+            <ChecksWarningBanner
+              checksResult={checksResult}
+              onOpenChecks={() => setViewType('checks')}
+              onDismiss={() => setChecksWarningDismissed(true)}
+            />
+          )}
         {viewType === 'checks' ? (
           <ChecksView
             checksResult={checksResult}
