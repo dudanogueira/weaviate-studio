@@ -904,6 +904,147 @@ describe('ClusterPanel', () => {
     });
   });
 
+  describe('Checks integration', () => {
+    const sampleChecksResult = {
+      timestamp: '2024-01-01T00:00:00.000Z',
+      hasIssues: true,
+      multiTenancy: {
+        groups: [
+          {
+            collections: [
+              { name: 'Col1', objectCount: 10 },
+              { name: 'Col2', objectCount: 5 },
+            ],
+            count: 2,
+            totalObjects: 15,
+          },
+        ],
+        hasIssues: true,
+      },
+      emptyShards: { entries: [], hasIssues: false },
+      replicationImbalance: { collections: [], hasIssues: false },
+    };
+
+    test('includes checksResult in init message when provided', () => {
+      const connectionId = 'test-connection-123';
+
+      ClusterPanel.createOrShow(
+        mockExtensionUri,
+        connectionId,
+        { nodes: [] },
+        'Test',
+        undefined,
+        undefined,
+        sampleChecksResult
+      );
+
+      const messageHandler = mockPanel.webview.onDidReceiveMessage.mock.calls[0][0];
+      messageHandler({ command: 'ready' });
+
+      expect(mockPanel.webview.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: 'init',
+          checksResult: sampleChecksResult,
+        })
+      );
+    });
+
+    test('checksResult is null in init message when not provided', () => {
+      ClusterPanel.createOrShow(mockExtensionUri, 'test-id', { nodes: [] }, 'Test');
+
+      const messageHandler = mockPanel.webview.onDidReceiveMessage.mock.calls[0][0];
+      messageHandler({ command: 'ready' });
+
+      const initCall = mockPanel.webview.postMessage.mock.calls.find(
+        (call: any) => call[0].command === 'init'
+      );
+      expect(initCall).toBeDefined();
+      expect(initCall[0].checksResult).toBeUndefined();
+    });
+
+    test('postMessage sends checksResult to webview', () => {
+      const connectionId = 'test-connection-123';
+      const panel = ClusterPanel.createOrShow(
+        mockExtensionUri,
+        connectionId,
+        { nodes: [] },
+        'Test'
+      );
+
+      mockPanel.webview.postMessage.mockClear();
+
+      panel.postMessage({ command: 'checksResult', result: sampleChecksResult });
+
+      expect(mockPanel.webview.postMessage).toHaveBeenCalledWith({
+        command: 'checksResult',
+        result: sampleChecksResult,
+      });
+    });
+
+    test('runChecks command is forwarded to onMessageCallback', async () => {
+      const onMessageCallback = jest.fn().mockResolvedValue(undefined);
+      const connectionId = 'test-connection-123';
+
+      ClusterPanel.createOrShow(
+        mockExtensionUri,
+        connectionId,
+        { nodes: [] },
+        'Test',
+        onMessageCallback
+      );
+
+      const messageHandler = mockPanel.webview.onDidReceiveMessage.mock.calls[0][0];
+      await messageHandler({ command: 'runChecks' });
+
+      expect(onMessageCallback).toHaveBeenCalledWith(
+        { command: 'runChecks' },
+        expect.any(Function)
+      );
+    });
+
+    test('switchTab command sent via setPendingTab before ready', () => {
+      const connectionId = 'test-connection-123';
+      const panel = ClusterPanel.createOrShow(
+        mockExtensionUri,
+        connectionId,
+        { nodes: [] },
+        'Test'
+      );
+
+      panel.setPendingTab('checks');
+
+      const messageHandler = mockPanel.webview.onDidReceiveMessage.mock.calls[0][0];
+      mockPanel.webview.postMessage.mockClear();
+      messageHandler({ command: 'ready' });
+
+      expect(mockPanel.webview.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ command: 'switchTab', tab: 'checks' })
+      );
+    });
+
+    test('switchTab command sent immediately via setPendingTab after ready', () => {
+      const connectionId = 'test-connection-123';
+      const panel = ClusterPanel.createOrShow(
+        mockExtensionUri,
+        connectionId,
+        { nodes: [] },
+        'Test'
+      );
+
+      // Fire ready first so _pendingInitData is cleared
+      const messageHandler = mockPanel.webview.onDidReceiveMessage.mock.calls[0][0];
+      messageHandler({ command: 'ready' });
+      mockPanel.webview.postMessage.mockClear();
+
+      panel.setPendingTab('checks');
+
+      expect(mockPanel.webview.postMessage).toHaveBeenCalledWith({
+        command: 'switchTab',
+        tab: 'checks',
+      });
+    });
+  });
+
   describe('Edge cases', () => {
     test('handles multiple rapid createOrShow calls', () => {
       const connectionId = 'test-connection-123';

@@ -416,7 +416,6 @@ export class WeaviateTreeDataProvider implements vscode.TreeDataProvider<Weaviat
       element.iconPath = hasAnyIssue
         ? new vscode.ThemeIcon('warning', new vscode.ThemeColor('list.warningForeground'))
         : new vscode.ThemeIcon('database');
-      // @ts-ignore — description is read-only on TreeItem but safe to set here
       element.description = hasAnyIssue
         ? `⚠ ${issueSections} check issue${issueSections > 1 ? 's' : ''}`
         : undefined;
@@ -3575,15 +3574,15 @@ export class WeaviateTreeDataProvider implements vscode.TreeDataProvider<Weaviat
   }
 
   /**
-   * Returns the last saved checks result for a connection, or null if none exists.
-   */
-  /**
    * Returns the cached verbose nodes for a connection, if available.
    */
   public getCachedClusterNodes(connectionId: string): Node<'verbose'>[] | undefined {
     return this.clusterNodesCache[connectionId];
   }
 
+  /**
+   * Returns the last saved checks result for a connection, or null if none exists.
+   */
   public getLastChecksResult(connectionId: string): ChecksResult | null {
     return this.context.globalState.get<ChecksResult>(`checksResults.${connectionId}`) ?? null;
   }

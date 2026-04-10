@@ -387,10 +387,15 @@ function TruncatedName({ name, tag: Tag = 'span' }: { name: string; tag?: 'span'
 
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(name).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
+    navigator.clipboard
+      .writeText(name)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      .catch((err) => {
+        console.warn('Failed to copy to clipboard:', err);
+      });
   };
 
   return (
