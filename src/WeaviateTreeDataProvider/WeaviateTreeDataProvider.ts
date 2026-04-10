@@ -3531,7 +3531,6 @@ export class WeaviateTreeDataProvider implements vscode.TreeDataProvider<Weaviat
   public async runChecks(connectionId: string): Promise<ChecksResult> {
     const collections = this.collections[connectionId] ?? [];
     const objectCounts = this._getObjectCountsFromNodes(connectionId);
-    const groups = findMultiTenantCandidates(collections, objectCounts);
 
     const rawNodes = this.clusterNodesCache[connectionId] ?? [];
     // Filter shards to only collections still present in local state so stale
@@ -3544,8 +3543,13 @@ export class WeaviateTreeDataProvider implements vscode.TreeDataProvider<Weaviat
     const mtCollections = new Set(
       collections.filter((c) => c.schema?.multiTenancy?.enabled).map((c) => c.label)
     );
-    const emptyShardEntries = findEmptyShards(nodes as any, mtCollections);
-    const replicationImbalances = findReplicationImbalances(nodes as any);
+
+    // All three checks are independent — run them in parallel.
+    const [groups, emptyShardEntries, replicationImbalances] = await Promise.all([
+      Promise.resolve(findMultiTenantCandidates(collections, objectCounts)),
+      Promise.resolve(findEmptyShards(nodes as any, mtCollections)),
+      Promise.resolve(findReplicationImbalances(nodes as any)),
+    ]);
 
     const result: ChecksResult = {
       timestamp: new Date().toISOString(),
@@ -3957,11 +3961,12 @@ export class WeaviateTreeDataProvider implements vscode.TreeDataProvider<Weaviat
       // Refresh the tree view
       this.refresh();
 
-      // Update cluster panel with latest node/collection stats, then recompute
-      // checks so the Checks tab reflects the deletion immediately.
+      // Refresh node cache first, then update the panel and recompute checks in parallel.
       await this.fetchNodes(connectionId);
-      await this.updateClusterPanelIfOpen(connectionId);
-      await this._recomputeChecksAndSend(connectionId);
+      await Promise.all([
+        this.updateClusterPanelIfOpen(connectionId),
+        this._recomputeChecksAndSend(connectionId),
+      ]);
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error('Error in deleteCollection:', error);
@@ -4001,11 +4006,12 @@ export class WeaviateTreeDataProvider implements vscode.TreeDataProvider<Weaviat
       // Refresh the tree view
       this.refresh();
 
-      // Update cluster panel with latest node/collection stats, then recompute
-      // checks so the Checks tab reflects the deletion immediately.
+      // Refresh node cache first, then update the panel and recompute checks in parallel.
       await this.fetchNodes(connectionId);
-      await this.updateClusterPanelIfOpen(connectionId);
-      await this._recomputeChecksAndSend(connectionId);
+      await Promise.all([
+        this.updateClusterPanelIfOpen(connectionId),
+        this._recomputeChecksAndSend(connectionId),
+      ]);
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error('Error in deleteAllCollections:', error);
@@ -4405,8 +4411,6 @@ export class WeaviateTreeDataProvider implements vscode.TreeDataProvider<Weaviat
   private async _recomputeChecksAndSend(connectionId: string): Promise<void> {
     const collections = this.collections[connectionId] ?? [];
     const objectCounts = this._getObjectCountsFromNodes(connectionId);
-    const candidates = findMultiTenantCandidates(collections, objectCounts);
-    this.mtCandidates[connectionId] = candidates;
 
     const rawNodes = this.clusterNodesCache[connectionId] ?? [];
     // Filter shards to only collections still present in local state so stale
@@ -4419,8 +4423,14 @@ export class WeaviateTreeDataProvider implements vscode.TreeDataProvider<Weaviat
     const mtCollections = new Set(
       collections.filter((c) => c.schema?.multiTenancy?.enabled).map((c) => c.label)
     );
-    const emptyShardEntries = findEmptyShards(nodes as any, mtCollections);
-    const replicationImbalances = findReplicationImbalances(nodes as any);
+
+    // All three checks are independent — run them in parallel.
+    const [candidates, emptyShardEntries, replicationImbalances] = await Promise.all([
+      Promise.resolve(findMultiTenantCandidates(collections, objectCounts)),
+      Promise.resolve(findEmptyShards(nodes as any, mtCollections)),
+      Promise.resolve(findReplicationImbalances(nodes as any)),
+    ]);
+    this.mtCandidates[connectionId] = candidates;
 
     const result: ChecksResult = {
       timestamp: new Date().toISOString(),
