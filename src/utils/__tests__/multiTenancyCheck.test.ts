@@ -2,7 +2,10 @@ import {
   computeCollectionHash,
   computeCandidatesDismissKey,
   findMultiTenantCandidates,
+  findEmptyShards,
+  findReplicationImbalances,
   MtCandidateGroup,
+  NodeLike,
   PropertyLike,
 } from '../multiTenancyCheck';
 import { CollectionWithSchema } from '../../types';
@@ -457,5 +460,150 @@ describe('computeCandidatesDismissKey', () => {
       },
     ];
     expect(computeCandidatesDismissKey(before)).not.toBe(computeCandidatesDismissKey(after));
+  });
+});
+
+// ─── findEmptyShards ──────────────────────────────────────────────────────────
+
+function makeNode(
+  name: string,
+  shards: { class: string; name: string; objectCount: number }[]
+): NodeLike {
+  return { name, shards };
+}
+
+describe('findEmptyShards', () => {
+  it('returns empty array when there are no nodes', () => {
+    expect(findEmptyShards([])).toHaveLength(0);
+  });
+
+  it('returns empty array when no shards have zero objects', () => {
+    const nodes = [makeNode('node-1', [{ class: 'Article', name: 'shard-1', objectCount: 100 }])];
+    expect(findEmptyShards(nodes)).toHaveLength(0);
+  });
+
+  it('reports a shard with zero objects', () => {
+    const nodes = [makeNode('node-1', [{ class: 'Article', name: 'shard-1', objectCount: 0 }])];
+    const result = findEmptyShards(nodes);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual({
+      collectionName: 'Article',
+      nodeName: 'node-1',
+      shardName: 'shard-1',
+    });
+  });
+
+  it('reports empty shards across multiple nodes', () => {
+    const nodes = [
+      makeNode('node-1', [{ class: 'Article', name: 'shard-a', objectCount: 0 }]),
+      makeNode('node-2', [{ class: 'Article', name: 'shard-b', objectCount: 0 }]),
+    ];
+    expect(findEmptyShards(nodes)).toHaveLength(2);
+  });
+
+  it('only reports shards with exactly zero objects', () => {
+    const nodes = [
+      makeNode('node-1', [
+        { class: 'Article', name: 'shard-empty', objectCount: 0 },
+        { class: 'Article', name: 'shard-full', objectCount: 1 },
+      ]),
+    ];
+    const result = findEmptyShards(nodes);
+    expect(result).toHaveLength(1);
+    expect(result[0].shardName).toBe('shard-empty');
+  });
+
+  it('skips collections listed in skipCollections', () => {
+    const nodes = [
+      makeNode('node-1', [
+        { class: 'MTCollection', name: 'tenant-shard', objectCount: 0 },
+        { class: 'RegularCollection', name: 'empty-shard', objectCount: 0 },
+      ]),
+    ];
+    const result = findEmptyShards(nodes, new Set(['MTCollection']));
+    expect(result).toHaveLength(1);
+    expect(result[0].collectionName).toBe('RegularCollection');
+  });
+
+  it('handles nodes with null/undefined shards gracefully', () => {
+    const nodes: NodeLike[] = [{ name: 'node-1', shards: null }];
+    expect(() => findEmptyShards(nodes)).not.toThrow();
+    expect(findEmptyShards(nodes)).toHaveLength(0);
+  });
+});
+
+// ─── findReplicationImbalances ────────────────────────────────────────────────
+
+describe('findReplicationImbalances', () => {
+  it('returns empty array when there are no nodes', () => {
+    expect(findReplicationImbalances([])).toHaveLength(0);
+  });
+
+  it('returns empty array when each shard appears on only one node', () => {
+    const nodes = [
+      makeNode('node-1', [{ class: 'Article', name: 'shard-1', objectCount: 100 }]),
+      makeNode('node-2', [{ class: 'Article', name: 'shard-2', objectCount: 200 }]),
+    ];
+    expect(findReplicationImbalances(nodes)).toHaveLength(0);
+  });
+
+  it('returns empty array when replicas have matching object counts', () => {
+    const nodes = [
+      makeNode('node-1', [{ class: 'Article', name: 'shard-1', objectCount: 100 }]),
+      makeNode('node-2', [{ class: 'Article', name: 'shard-1', objectCount: 100 }]),
+    ];
+    expect(findReplicationImbalances(nodes)).toHaveLength(0);
+  });
+
+  it('detects an imbalance when the same shard has different counts on two nodes', () => {
+    const nodes = [
+      makeNode('node-1', [{ class: 'Article', name: 'shard-1', objectCount: 100 }]),
+      makeNode('node-2', [{ class: 'Article', name: 'shard-1', objectCount: 90 }]),
+    ];
+    const result = findReplicationImbalances(nodes);
+    expect(result).toHaveLength(1);
+    expect(result[0].collectionName).toBe('Article');
+    expect(result[0].shards).toHaveLength(1);
+    expect(result[0].shards[0].shardName).toBe('shard-1');
+    expect(result[0].shards[0].replicas).toHaveLength(2);
+  });
+
+  it('only flags the imbalanced shard when a collection has a mix', () => {
+    const nodes = [
+      makeNode('node-1', [
+        { class: 'Article', name: 'balanced', objectCount: 50 },
+        { class: 'Article', name: 'skewed', objectCount: 100 },
+      ]),
+      makeNode('node-2', [
+        { class: 'Article', name: 'balanced', objectCount: 50 },
+        { class: 'Article', name: 'skewed', objectCount: 10 },
+      ]),
+    ];
+    const result = findReplicationImbalances(nodes);
+    expect(result).toHaveLength(1);
+    expect(result[0].shards).toHaveLength(1);
+    expect(result[0].shards[0].shardName).toBe('skewed');
+  });
+
+  it('reports imbalances across multiple collections independently', () => {
+    const nodes = [
+      makeNode('node-1', [
+        { class: 'Article', name: 'shard-a', objectCount: 100 },
+        { class: 'Comment', name: 'shard-b', objectCount: 200 },
+      ]),
+      makeNode('node-2', [
+        { class: 'Article', name: 'shard-a', objectCount: 50 },
+        { class: 'Comment', name: 'shard-b', objectCount: 199 },
+      ]),
+    ];
+    const result = findReplicationImbalances(nodes);
+    expect(result).toHaveLength(2);
+    expect(result.map((r) => r.collectionName).sort()).toEqual(['Article', 'Comment']);
+  });
+
+  it('handles nodes with null/undefined shards gracefully', () => {
+    const nodes: NodeLike[] = [{ name: 'node-1', shards: undefined }];
+    expect(() => findReplicationImbalances(nodes)).not.toThrow();
+    expect(findReplicationImbalances(nodes)).toHaveLength(0);
   });
 });
