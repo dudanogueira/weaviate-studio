@@ -295,15 +295,14 @@ describe('findMultiTenantCandidates', () => {
     expect(findMultiTenantCandidates(cols)).toHaveLength(0);
   });
 
-  it('groups all no-property collections together (scenario 8)', () => {
+  it('excludes no-property collections — they have no meaningful schema to compare (scenario 8)', () => {
     const cols = [
       makeCollection('Empty1', []),
       makeCollection('Empty2', []),
       makeCollection('Empty3', []),
     ];
-    const result = findMultiTenantCandidates(cols);
-    expect(result).toHaveLength(1);
-    expect(result[0].count).toBe(3);
+    // Collections without properties are skipped: no schema fingerprint to compare.
+    expect(findMultiTenantCandidates(cols)).toHaveLength(0);
   });
 
   it('does not group collections with different schemas', () => {

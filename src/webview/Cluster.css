@@ -905,6 +905,23 @@
   margin: 0 0 8px 0;
   font-size: 14px;
   font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.checks-section--warning {
+  border-left: 3px solid var(--vscode-editorWarning-foreground, #cca700);
+  padding-left: 12px;
+}
+
+.checks-section--warning .checks-section-title {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+}
+
+.checks-section-warning-icon {
+  font-size: 15px;
+  line-height: 1;
 }
 
 .checks-section-desc {
@@ -921,6 +938,26 @@
 
 .checks-link:hover {
   text-decoration: underline;
+}
+
+.checks-info-callout {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  background-color: var(--vscode-textBlockQuote-background, rgba(0, 120, 212, 0.08));
+  border-left: 3px solid var(--vscode-textLink-foreground, #3794ff);
+  border-radius: 0 4px 4px 0;
+  font-size: 12px;
+  color: var(--vscode-foreground);
+  line-height: 1.5;
+}
+
+.checks-info-callout-icon {
+  flex-shrink: 0;
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 .checks-ok {
@@ -1072,4 +1109,66 @@
 .checks-col-count {
   font-size: 12px;
   color: var(--vscode-descriptionForeground);
+}
+
+/* Empty shards table */
+.checks-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+.checks-table th {
+  text-align: left;
+  padding: 4px 8px;
+  font-weight: 600;
+  color: var(--vscode-descriptionForeground);
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.checks-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--vscode-panel-border);
+  color: var(--vscode-foreground);
+}
+
+.checks-table tr:last-child td {
+  border-bottom: none;
+}
+
+.checks-shard-name {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
+/* Replication imbalance */
+.checks-imbalance-shard {
+  margin: 6px 0 6px 8px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--vscode-panel-border);
+}
+
+.checks-replica-list {
+  list-style: none;
+  padding: 0;
+  margin: 4px 0 0 0;
+}
+
+.checks-replica-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 2px 0;
+  font-size: 12px;
+}
+
+.checks-replica-node {
+  color: var(--vscode-foreground);
+}
+
+.checks-replica-count {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
 }

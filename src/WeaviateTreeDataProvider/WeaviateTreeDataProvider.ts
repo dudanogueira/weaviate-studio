@@ -21,6 +21,8 @@ import { WEAVIATE_INTEGRATION_HEADER } from '../constants';
 import { getTelemetryService, TELEMETRY_EVENTS } from '../telemetry';
 import {
   findMultiTenantCandidates,
+  findEmptyShards,
+  findReplicationImbalances,
   computeCandidatesDismissKey,
   MtCandidateGroup,
   ChecksResult,
@@ -106,6 +108,9 @@ export class WeaviateTreeDataProvider implements vscode.TreeDataProvider<Weaviat
 
   /** MT candidate groups per connection, sorted by totalObjects descending. */
   private mtCandidates: Record<string, MtCandidateGroup[]> = {};
+
+  /** Number of check sections (MT, empty shards, replication) with issues, per connection. */
+  private checksIssueSectionCount: Record<string, number> = {};
 
   /** VS Code extension context */
   private readonly context: vscode.ExtensionContext;
@@ -404,23 +409,24 @@ export class WeaviateTreeDataProvider implements vscode.TreeDataProvider<Weaviat
       }
       element.tooltip = 'Available Weaviate modules';
     } else if (element.itemType === 'collectionsGroup') {
-      const mtCount = element.connectionId
-        ? (this.mtCandidates[element.connectionId]?.length ?? 0)
+      const issueSections = element.connectionId
+        ? (this.checksIssueSectionCount[element.connectionId] ?? 0)
         : 0;
-      element.iconPath =
-        mtCount > 0
-          ? new vscode.ThemeIcon('warning', new vscode.ThemeColor('list.warningForeground'))
-          : new vscode.ThemeIcon('database');
+      const hasAnyIssue = issueSections > 0;
+      element.iconPath = hasAnyIssue
+        ? new vscode.ThemeIcon('warning', new vscode.ThemeColor('list.warningForeground'))
+        : new vscode.ThemeIcon('database');
       // @ts-ignore — description is read-only on TreeItem but safe to set here
-      element.description =
-        mtCount > 0 ? `⚠ ${mtCount} MT candidate${mtCount > 1 ? 's' : ''}` : undefined;
-      element.tooltip =
-        mtCount > 0
-          ? 'Some collections share identical schemas — they could use Multi-Tenancy'
-          : 'Collections in this instance';
-      // Use a distinct contextValue when there's an MT warning so we can show the inline button
-      element.contextValue =
-        mtCount > 0 ? 'weaviateCollectionsGroupMtWarning' : 'weaviateCollectionsGroup';
+      element.description = hasAnyIssue
+        ? `⚠ ${issueSections} check issue${issueSections > 1 ? 's' : ''}`
+        : undefined;
+      element.tooltip = hasAnyIssue
+        ? `${issueSections} check issue${issueSections > 1 ? 's' : ''} detected — open Checks for details`
+        : 'Collections in this instance';
+      // Use a distinct contextValue when there are any check warnings so we can show the inline button
+      element.contextValue = hasAnyIssue
+        ? 'weaviateCollectionsGroupMtWarning'
+        : 'weaviateCollectionsGroup';
     } else if (element.itemType === 'backups') {
       if (!element.iconPath) {
         element.iconPath = new vscode.ThemeIcon('archive');
@@ -3441,30 +3447,15 @@ export class WeaviateTreeDataProvider implements vscode.TreeDataProvider<Weaviat
         this.collections[connectionId] = [];
       }
 
-      // Compute MT candidates before refresh so badges render immediately
-      const objectCounts = this._getObjectCountsFromNodes(connectionId);
-      const candidates = findMultiTenantCandidates(this.collections[connectionId], objectCounts);
-      this.mtCandidates[connectionId] = candidates;
-
-      // Keep the saved checks result in sync with the live collection state so
-      // the ClusterPanel banner and Checks tab reflect reality without requiring
-      // the user to manually click "Run Checks". This mirrors what runChecks()
-      // does, but runs automatically on every collection fetch so the tree badge
-      // and the panel banner are always in agreement.
-      const updatedResult: ChecksResult = {
-        timestamp: new Date().toISOString(),
-        multiTenancy: { groups: candidates, hasIssues: candidates.length > 0 },
-      };
-      await this.context.globalState.update(`checksResults.${connectionId}`, updatedResult);
-      ClusterPanel.getPanel(connectionId)?.postMessage({
-        command: 'checksResult',
-        result: updatedResult,
-      });
+      // Recompute all checks and push the result to the ClusterPanel so badges
+      // and the panel banner always reflect the current collection state.
+      await this._recomputeChecksAndSend(connectionId);
 
       // Refresh the tree view
       this.refresh();
 
       // Show notification async — fire and forget so it does not block the tree
+      const candidates = this.mtCandidates[connectionId] ?? [];
       if (candidates.length > 0) {
         this._notifyMtCandidates(connectionId, candidates).catch(console.error);
       }
@@ -3543,19 +3534,41 @@ export class WeaviateTreeDataProvider implements vscode.TreeDataProvider<Weaviat
     const objectCounts = this._getObjectCountsFromNodes(connectionId);
     const groups = findMultiTenantCandidates(collections, objectCounts);
 
+    const rawNodes = this.clusterNodesCache[connectionId] ?? [];
+    // Filter shards to only collections still present in local state so stale
+    // node status data cannot produce false positives immediately after a deletion.
+    const knownCollections = new Set(collections.map((c) => c.label));
+    const nodes = rawNodes.map((node) => ({
+      ...node,
+      shards: (node.shards ?? []).filter((shard) => knownCollections.has((shard as any).class)),
+    }));
+    const mtCollections = new Set(
+      collections.filter((c) => c.schema?.multiTenancy?.enabled).map((c) => c.label)
+    );
+    const emptyShardEntries = findEmptyShards(nodes as any, mtCollections);
+    const replicationImbalances = findReplicationImbalances(nodes as any);
+
     const result: ChecksResult = {
       timestamp: new Date().toISOString(),
-      multiTenancy: {
-        groups,
-        hasIssues: groups.length > 0,
+      hasIssues:
+        groups.length > 0 || emptyShardEntries.length > 0 || replicationImbalances.length > 0,
+      multiTenancy: { groups, hasIssues: groups.length > 0 },
+      emptyShards: { entries: emptyShardEntries, hasIssues: emptyShardEntries.length > 0 },
+      replicationImbalance: {
+        collections: replicationImbalances,
+        hasIssues: replicationImbalances.length > 0,
       },
     };
 
     // Persist so the result survives panel close/reopen
     await this.context.globalState.update(`checksResults.${connectionId}`, result);
 
-    // Update badge
+    // Update badges
     this.mtCandidates[connectionId] = groups;
+    this.checksIssueSectionCount[connectionId] =
+      (groups.length > 0 ? 1 : 0) +
+      (emptyShardEntries.length > 0 ? 1 : 0) +
+      (replicationImbalances.length > 0 ? 1 : 0);
     this.refresh();
 
     return result;
@@ -3945,9 +3958,11 @@ export class WeaviateTreeDataProvider implements vscode.TreeDataProvider<Weaviat
       // Refresh the tree view
       this.refresh();
 
-      // Update cluster panel with latest node/collection stats
+      // Update cluster panel with latest node/collection stats, then recompute
+      // checks so the Checks tab reflects the deletion immediately.
       await this.fetchNodes(connectionId);
       await this.updateClusterPanelIfOpen(connectionId);
+      await this._recomputeChecksAndSend(connectionId);
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error('Error in deleteCollection:', error);
@@ -3987,9 +4002,11 @@ export class WeaviateTreeDataProvider implements vscode.TreeDataProvider<Weaviat
       // Refresh the tree view
       this.refresh();
 
-      // Update cluster panel with latest node/collection stats
+      // Update cluster panel with latest node/collection stats, then recompute
+      // checks so the Checks tab reflects the deletion immediately.
       await this.fetchNodes(connectionId);
       await this.updateClusterPanelIfOpen(connectionId);
+      await this._recomputeChecksAndSend(connectionId);
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error('Error in deleteAllCollections:', error);
@@ -4379,6 +4396,54 @@ export class WeaviateTreeDataProvider implements vscode.TreeDataProvider<Weaviat
    * A warning notification is shown so the user knows the panel may be stale
    * and can manually refresh it.
    */
+  /**
+   * Recomputes all checks from the current cached collections and nodes, persists the result,
+   * and pushes a `checksResult` message to the ClusterPanel if it is open.
+   *
+   * Call this whenever collections or node shards change (fetch, delete, etc.) so the
+   * Checks tab and tree badges stay in sync without requiring a manual "Run Checks".
+   */
+  private async _recomputeChecksAndSend(connectionId: string): Promise<void> {
+    const collections = this.collections[connectionId] ?? [];
+    const objectCounts = this._getObjectCountsFromNodes(connectionId);
+    const candidates = findMultiTenantCandidates(collections, objectCounts);
+    this.mtCandidates[connectionId] = candidates;
+
+    const rawNodes = this.clusterNodesCache[connectionId] ?? [];
+    // Filter shards to only collections still present in local state so stale
+    // node status data cannot produce false positives immediately after a deletion.
+    const knownCollections = new Set(collections.map((c) => c.label));
+    const nodes = rawNodes.map((node) => ({
+      ...node,
+      shards: (node.shards ?? []).filter((shard) => knownCollections.has((shard as any).class)),
+    }));
+    const mtCollections = new Set(
+      collections.filter((c) => c.schema?.multiTenancy?.enabled).map((c) => c.label)
+    );
+    const emptyShardEntries = findEmptyShards(nodes as any, mtCollections);
+    const replicationImbalances = findReplicationImbalances(nodes as any);
+
+    const result: ChecksResult = {
+      timestamp: new Date().toISOString(),
+      hasIssues:
+        candidates.length > 0 || emptyShardEntries.length > 0 || replicationImbalances.length > 0,
+      multiTenancy: { groups: candidates, hasIssues: candidates.length > 0 },
+      emptyShards: { entries: emptyShardEntries, hasIssues: emptyShardEntries.length > 0 },
+      replicationImbalance: {
+        collections: replicationImbalances,
+        hasIssues: replicationImbalances.length > 0,
+      },
+    };
+
+    this.checksIssueSectionCount[connectionId] =
+      (candidates.length > 0 ? 1 : 0) +
+      (emptyShardEntries.length > 0 ? 1 : 0) +
+      (replicationImbalances.length > 0 ? 1 : 0);
+
+    await this.context.globalState.update(`checksResults.${connectionId}`, result);
+    ClusterPanel.getPanel(connectionId)?.postMessage({ command: 'checksResult', result });
+  }
+
   private async updateClusterPanelIfOpen(connectionId: string): Promise<void> {
     try {
       // Check if cluster panel is open for this connection

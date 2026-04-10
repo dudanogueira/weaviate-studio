@@ -1828,6 +1828,16 @@ export function activate(context: vscode.ExtensionContext) {
               }
             } else if (message.command === 'runChecks') {
               try {
+                // Refresh node status first so checks and the UI both use up-to-date data.
+                await weaviateTreeDataProvider.fetchNodes(item.connectionId);
+                const freshNodes =
+                  weaviateTreeDataProvider.getCachedClusterNodes(item.connectionId) ?? [];
+                const updatedConnection = connectionManager.getConnection(item.connectionId);
+                postMessage({
+                  command: 'updateData',
+                  nodeStatusData: freshNodes,
+                  openClusterViewOnConnect: updatedConnection?.openClusterViewOnConnect,
+                });
                 const result = await weaviateTreeDataProvider.runChecks(item.connectionId);
                 postMessage({ command: 'checksResult', result });
               } catch (error: unknown) {

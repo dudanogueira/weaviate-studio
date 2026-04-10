@@ -78,10 +78,41 @@ interface MtCandidateGroup {
   totalObjects: number;
 }
 
+interface EmptyShardEntry {
+  collectionName: string;
+  nodeName: string;
+  shardName: string;
+}
+
+interface ShardReplica {
+  nodeName: string;
+  objectCount: number;
+}
+
+interface ImbalancedShard {
+  shardName: string;
+  replicas: ShardReplica[];
+}
+
+interface ReplicationImbalanceCollection {
+  collectionName: string;
+  shards: ImbalancedShard[];
+}
+
 interface ChecksResult {
   timestamp: string;
+  /** True when any individual check has issues. Present in newer results. */
+  hasIssues?: boolean;
   multiTenancy: {
     groups: MtCandidateGroup[];
+    hasIssues: boolean;
+  };
+  emptyShards?: {
+    entries: EmptyShardEntry[];
+    hasIssues: boolean;
+  };
+  replicationImbalance?: {
+    collections: ReplicationImbalanceCollection[];
     hasIssues: boolean;
   };
 }
@@ -94,8 +125,29 @@ interface ChecksViewProps {
   onRunChecks: () => void;
 }
 
+function SpinnerIcon() {
+  return (
+    <svg
+      className="loading-spinner"
+      width="20"
+      height="20"
+      viewBox="0 0 16 16"
+      fill="currentColor"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path d="M13.451 5.609l-.579-.939-1.068.812-.076.094c-.335.415-.927 1.341-1.124 2.876l-.021.165.033.163.071.345c0 1.654-1.346 3-3 3-.795 0-1.545-.311-2.107-.868-.563-.567-.873-1.317-.873-2.111 0-1.431 1.007-2.632 2.351-2.929v2.498l2.528-2.134-2.528-2.076v2.11C4.753 6.867 3 8.819 3 11.131c0 1.14.445 2.21 1.253 3.014.808.803 1.883 1.246 3.027 1.246 2.31 0 4.216-1.751 4.455-4.027.098-.858.451-1.935.832-2.489.167-.237.351-.469.555-.678l.131-.117zm-2.359.81c-.172-.268-.33-.518-.475-.748-1.303-2.066-2.916-2.758-4.093-2.758-1.087 0-2.1.563-2.7 1.5-.302.473-.5 1.013-.6 1.596l1.013.014c.087-.484.245-.95.465-1.371.437-.838 1.176-1.34 1.987-1.34.852 0 1.839.428 2.659 1.147.411.363.771.77 1.073 1.211.136.202.261.408.376.616.092-.085.184-.168.278-.25l.017-.017z" />
+    </svg>
+  );
+}
+
+function openExternalLink(url: string) {
+  vscode.postMessage({ command: 'openExternal', url });
+}
+
 function ChecksView({ checksResult, isRunning, onRunChecks }: ChecksViewProps) {
   const groups = checksResult?.multiTenancy.groups ?? [];
+  const emptyShardEntries = checksResult?.emptyShards?.entries ?? [];
+  const replicationCollections = checksResult?.replicationImbalance?.collections ?? [];
   const timestamp = checksResult?.timestamp
     ? new Date(checksResult.timestamp).toLocaleString()
     : null;
@@ -118,16 +170,7 @@ function ChecksView({ checksResult, isRunning, onRunChecks }: ChecksViewProps) {
 
       {isRunning && (
         <div className="checks-running">
-          <svg
-            className="loading-spinner"
-            width="20"
-            height="20"
-            viewBox="0 0 16 16"
-            fill="currentColor"
-            xmlns="http://www.w3.org/2000/svg"
-          >
-            <path d="M13.451 5.609l-.579-.939-1.068.812-.076.094c-.335.415-.927 1.341-1.124 2.876l-.021.165.033.163.071.345c0 1.654-1.346 3-3 3-.795 0-1.545-.311-2.107-.868-.563-.567-.873-1.317-.873-2.111 0-1.431 1.007-2.632 2.351-2.929v2.498l2.528-2.134-2.528-2.076v2.11C4.753 6.867 3 8.819 3 11.131c0 1.14.445 2.21 1.253 3.014.808.803 1.883 1.246 3.027 1.246 2.31 0 4.216-1.751 4.455-4.027.098-.858.451-1.935.832-2.489.167-.237.351-.469.555-.678l.131-.117zm-2.359.81c-.172-.268-.33-.518-.475-.748-1.303-2.066-2.916-2.758-4.093-2.758-1.087 0-2.1.563-2.7 1.5-.302.473-.5 1.013-.6 1.596l1.013.014c.087-.484.245-.95.465-1.371.437-.838 1.176-1.34 1.987-1.34.852 0 1.839.428 2.659 1.147.411.363.771.77 1.073 1.211.136.202.261.408.376.616.092-.085.184-.168.278-.25l.017-.017z" />
-          </svg>
+          <SpinnerIcon />
           <p>Running checks…</p>
         </div>
       )}
@@ -143,8 +186,12 @@ function ChecksView({ checksResult, isRunning, onRunChecks }: ChecksViewProps) {
 
       {checksResult && (
         <div className="checks-results">
-          <div className="checks-section">
-            <h3 className="checks-section-title">Multi-Tenancy Candidates</h3>
+          {/* ── Multi-Tenancy Candidates ──────────────────────────────── */}
+          <div className={`checks-section${groups.length > 0 ? ' checks-section--warning' : ''}`}>
+            <h3 className="checks-section-title">
+              {groups.length > 0 && <span className="checks-section-warning-icon">⚠</span>}
+              Multi-Tenancy Candidates
+            </h3>
             {groups.length === 0 ? (
               <div className="checks-ok">
                 <span className="checks-ok-icon">✓</span>
@@ -160,10 +207,9 @@ function ChecksView({ checksResult, isRunning, onRunChecks }: ChecksViewProps) {
                     className="checks-link"
                     onClick={(e) => {
                       e.preventDefault();
-                      vscode.postMessage({
-                        command: 'openExternal',
-                        url: 'https://docs.weaviate.io/weaviate/manage-collections/multi-tenancy',
-                      });
+                      openExternalLink(
+                        'https://docs.weaviate.io/weaviate/manage-collections/multi-tenancy'
+                      );
                     }}
                   >
                     Learn more ↗
@@ -190,6 +236,140 @@ function ChecksView({ checksResult, isRunning, onRunChecks }: ChecksViewProps) {
                         </li>
                       ))}
                     </ul>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+
+          {/* ── Empty Shards ──────────────────────────────────────────── */}
+          <div
+            className={`checks-section${emptyShardEntries.length > 0 ? ' checks-section--warning' : ''}`}
+          >
+            <h3 className="checks-section-title">
+              {emptyShardEntries.length > 0 && (
+                <span className="checks-section-warning-icon">⚠</span>
+              )}
+              Empty Shards
+            </h3>
+            {emptyShardEntries.length === 0 ? (
+              <div className="checks-ok">
+                <span className="checks-ok-icon">✓</span>
+                No empty shards detected across the cluster.
+              </div>
+            ) : (
+              <>
+                <p className="checks-section-desc">
+                  The following shards contain zero objects. Empty shards may indicate incomplete
+                  data ingestion or collections that are no longer in use. Even without any objects,
+                  an empty collection adds overhead to your cluster — consider deleting collections
+                  that are no longer needed.
+                </p>
+                <div className="checks-info-callout">
+                  <span className="checks-info-callout-icon">ℹ️</span>
+                  Object counts reported by node status are not immediately synchronized and may be
+                  slightly delayed — only act on shards that consistently show zero over time.
+                </div>
+                {Object.entries(
+                  emptyShardEntries.reduce<Record<string, EmptyShardEntry[]>>((acc, entry) => {
+                    (acc[entry.collectionName] ??= []).push(entry);
+                    return acc;
+                  }, {})
+                ).map(([collectionName, entries]) => (
+                  <div key={collectionName} className="checks-group">
+                    <div className="checks-group-header">
+                      <span className="checks-group-label">{collectionName}</span>
+                      <span className="checks-group-count">
+                        {entries.length} empty shard{entries.length !== 1 ? 's' : ''}
+                      </span>
+                    </div>
+                    <table className="checks-table">
+                      <thead>
+                        <tr>
+                          <th>Node</th>
+                          <th>Shard</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {entries.map((entry, idx) => (
+                          <tr key={idx}>
+                            <td>{entry.nodeName}</td>
+                            <td className="checks-shard-name">{entry.shardName}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+
+          {/* ── Replication Imbalance ─────────────────────────────────── */}
+          <div
+            className={`checks-section${replicationCollections.length > 0 ? ' checks-section--warning' : ''}`}
+          >
+            <h3 className="checks-section-title">
+              {replicationCollections.length > 0 && (
+                <span className="checks-section-warning-icon">⚠</span>
+              )}
+              Replication Imbalance
+            </h3>
+            {replicationCollections.length === 0 ? (
+              <div className="checks-ok">
+                <span className="checks-ok-icon">✓</span>
+                All shard replicas have consistent object counts.
+              </div>
+            ) : (
+              <>
+                <p className="checks-section-desc">
+                  The following collections have shards whose replicas report different object
+                  counts across nodes. Persistent imbalances after ingestion finishes may indicate
+                  that async replication is disabled or lagging.{' '}
+                  <a
+                    href="https://docs.weaviate.io/deploy/configuration/async-rep"
+                    className="checks-link"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      openExternalLink('https://docs.weaviate.io/deploy/configuration/async-rep');
+                    }}
+                  >
+                    Enable async replication ↗
+                  </a>
+                </p>
+                <div className="checks-info-callout">
+                  <span className="checks-info-callout-icon">ℹ️</span>
+                  If you are actively ingesting data, this is normal — replicas sync asynchronously
+                  and imbalances resolve once ingestion completes.
+                </div>
+                <div className="checks-info-callout">
+                  <span className="checks-info-callout-icon">ℹ️</span>
+                  Object counts reported by node status are not immediately synchronized and may be
+                  slightly delayed — only act on imbalances that persist over time.
+                </div>
+                {replicationCollections.map((col) => (
+                  <div key={col.collectionName} className="checks-group">
+                    <div className="checks-group-header">
+                      <span className="checks-group-label">{col.collectionName}</span>
+                      <span className="checks-group-count">
+                        {col.shards.length} imbalanced shard{col.shards.length !== 1 ? 's' : ''}
+                      </span>
+                    </div>
+                    {col.shards.map((shard) => (
+                      <div key={shard.shardName} className="checks-imbalance-shard">
+                        <span className="checks-shard-name">{shard.shardName}</span>
+                        <ul className="checks-replica-list">
+                          {shard.replicas.map((replica) => (
+                            <li key={replica.nodeName} className="checks-replica-item">
+                              <span className="checks-replica-node">{replica.nodeName}</span>
+                              <span className="checks-replica-count">
+                                {replica.objectCount.toLocaleString()} objects
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
                   </div>
                 ))}
               </>
@@ -228,7 +408,7 @@ interface ChecksWarningBannerProps {
 }
 
 function ChecksWarningBanner({ checksResult, onOpenChecks, onDismiss }: ChecksWarningBannerProps) {
-  const hasIssues = checksResult?.multiTenancy?.hasIssues;
+  const hasIssues = checksResult?.hasIssues ?? checksResult?.multiTenancy?.hasIssues;
 
   return (
     <div className={`checks-warning-banner ${hasIssues ? 'has-issues' : 'info'}`}>
@@ -256,7 +436,7 @@ interface ShardComponentProps {
   onSelect: () => void;
 }
 
-function ShardComponent({ shard, nodeName, isSelected, onSelect }: ShardComponentProps) {
+function ShardComponent({ shard, isSelected, onSelect }: ShardComponentProps) {
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const statusOptions: Array<'READY' | 'READONLY'> = ['READY', 'READONLY'];
@@ -630,7 +810,7 @@ function CollectionView({
     const collectionMap = new Map<string, CollectionData>();
 
     nodeStatusData.forEach((node) => {
-      node.shards.forEach((shard) => {
+      (node.shards ?? []).forEach((shard) => {
         if (!collectionMap.has(shard.class)) {
           collectionMap.set(shard.class, {
             name: shard.class,
@@ -667,6 +847,14 @@ function CollectionView({
     onNodeSelect(nodeName);
     onShardSelect(''); // Reset shard selection
   };
+
+  if (collections.length === 0) {
+    return (
+      <div className="no-data">
+        <p>No collections found in this cluster.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="collections-list">
@@ -930,7 +1118,7 @@ function ClusterPanelWebview() {
           setIsRunningChecks(false);
           // Re-show the banner whenever fresh results arrive with issues,
           // even if the user previously dismissed it.
-          if (newResult?.multiTenancy?.hasIssues) {
+          if (newResult?.hasIssues ?? newResult?.multiTenancy?.hasIssues) {
             setChecksWarningDismissed(false);
           }
           break;
@@ -1152,29 +1340,31 @@ function ClusterPanelWebview() {
       <div className="cluster-header">
         <h1>Cluster Information</h1>
         <div className="header-controls">
-          <div className="search-input-wrapper">
-            <span className="search-icon">
-              <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.099zm-5.242 1.656a5.5 5.5 0 1 1 0-11 5.5 5.5 0 0 1 0 11z" />
-              </svg>
-            </span>
-            <input
-              className="search-input"
-              type="text"
-              placeholder="Filter by collection, shard, status…"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-            {searchQuery && (
-              <button
-                className="search-clear-button"
-                onClick={() => setSearchQuery('')}
-                title="Clear search"
-              >
-                ✕
-              </button>
-            )}
-          </div>
+          {viewType !== 'checks' && (
+            <div className="search-input-wrapper">
+              <span className="search-icon">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.099zm-5.242 1.656a5.5 5.5 0 1 1 0-11 5.5 5.5 0 0 1 0 11z" />
+                </svg>
+              </span>
+              <input
+                className="search-input"
+                type="text"
+                placeholder="Filter by collection, shard, status…"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+              {searchQuery && (
+                <button
+                  className="search-clear-button"
+                  onClick={() => setSearchQuery('')}
+                  title="Clear search"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          )}
           <span className="view-toggle-label">View:</span>
           <div className="view-toggle">
             <button
@@ -1194,9 +1384,15 @@ function ClusterPanelWebview() {
               onClick={() => setViewType('checks')}
             >
               Checks
-              {checksResult?.multiTenancy?.groups?.length
-                ? ` (${checksResult.multiTenancy.groups.length})`
-                : ''}
+              {(() => {
+                if (!checksResult) return '';
+                const issueCount = [
+                  checksResult.multiTenancy?.hasIssues,
+                  checksResult.emptyShards?.hasIssues,
+                  checksResult.replicationImbalance?.hasIssues,
+                ].filter(Boolean).length;
+                return issueCount > 0 ? ` (${issueCount})` : '';
+              })()}
             </button>
           </div>
           <div className="refresh-button-group">
@@ -1256,7 +1452,7 @@ function ClusterPanelWebview() {
       <div className="cluster-content" ref={contentRef}>
         {viewType !== 'checks' &&
           !checksWarningDismissed &&
-          checksResult?.multiTenancy?.hasIssues && (
+          (checksResult?.hasIssues ?? checksResult?.multiTenancy?.hasIssues) && (
             <ChecksWarningBanner
               checksResult={checksResult}
               onOpenChecks={() => setViewType('checks')}

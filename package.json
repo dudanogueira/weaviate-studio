@@ -648,17 +648,17 @@
         },
         {
           "command": "weaviate.refreshCollections",
-          "when": "view == weaviateConnectionsView && (viewItem == weaviateCollectionsGroup || viewItem == weaviateCollectionsGroupMtWarning)",
+          "when": "view == weaviateConnectionsView && viewItem =~ /^weaviateCollectionsGroup/",
           "group": "navigation@1"
         },
         {
           "command": "weaviate.refreshCollections",
-          "when": "view == weaviateConnectionsView && (viewItem == weaviateCollectionsGroup || viewItem == weaviateCollectionsGroupMtWarning)",
+          "when": "view == weaviateConnectionsView && viewItem =~ /^weaviateCollectionsGroup/",
           "group": "inline@2"
         },
         {
           "command": "weaviate.openMtChecks",
-          "when": "view == weaviateConnectionsView && (viewItem == weaviateCollectionsGroup || viewItem == weaviateCollectionsGroupMtWarning)",
+          "when": "view == weaviateConnectionsView && viewItem =~ /^weaviateCollectionsGroup/",
           "group": "navigation@2"
         },
         {
@@ -717,13 +717,13 @@
         },
         {
           "command": "weaviate.addCollection",
-          "when": "view == weaviateConnectionsView && viewItem == weaviateCollectionsGroup",
+          "when": "view == weaviateConnectionsView && viewItem =~ /^weaviateCollectionsGroup/",
           "group": "inline@1",
           "icon": "$(add)"
         },
         {
           "command": "weaviate.deleteAllCollections",
-          "when": "view == weaviateConnectionsView && viewItem == weaviateCollectionsGroup",
+          "when": "view == weaviateConnectionsView && viewItem =~ /^weaviateCollectionsGroup/",
           "group": "3_modification@1"
         },
         {

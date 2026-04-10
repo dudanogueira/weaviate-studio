@@ -39,6 +39,52 @@ export interface MtCandidateGroup {
   totalObjects: number;
 }
 
+// ─── Shared node/shard shape ─────────────────────────────────────────────────
+
+/** Minimal shard shape required by cluster checks (compatible with weaviate-client Node). */
+export interface ShardLike {
+  class: string;
+  name: string;
+  objectCount: number;
+}
+
+/** Minimal node shape required by cluster checks. */
+export interface NodeLike {
+  name: string;
+  shards: ShardLike[] | null | undefined;
+}
+
+// ─── Empty shards check ───────────────────────────────────────────────────────
+
+/** A single shard entry identified as empty. */
+export interface EmptyShardEntry {
+  collectionName: string;
+  nodeName: string;
+  shardName: string;
+}
+
+// ─── Replication imbalance check ─────────────────────────────────────────────
+
+/** Object-count breakdown for one replica of a shard. */
+export interface ShardReplica {
+  nodeName: string;
+  objectCount: number;
+}
+
+/** A shard whose replicas have mismatched object counts. */
+export interface ImbalancedShard {
+  shardName: string;
+  replicas: ShardReplica[];
+}
+
+/** A collection that contains at least one imbalanced shard. */
+export interface ReplicationImbalanceCollection {
+  collectionName: string;
+  shards: ImbalancedShard[];
+}
+
+// ─── Combined result ──────────────────────────────────────────────────────────
+
 /**
  * The result payload returned by a full checks run.
  * Serialized to globalState so it survives panel close/reopen.
@@ -46,8 +92,18 @@ export interface MtCandidateGroup {
 export interface ChecksResult {
   /** ISO-8601 timestamp of when the check was last run. */
   timestamp: string;
+  /** True when any individual check has issues. */
+  hasIssues: boolean;
   multiTenancy: {
     groups: MtCandidateGroup[];
+    hasIssues: boolean;
+  };
+  emptyShards: {
+    entries: EmptyShardEntry[];
+    hasIssues: boolean;
+  };
+  replicationImbalance: {
+    collections: ReplicationImbalanceCollection[];
     hasIssues: boolean;
   };
 }
@@ -185,6 +241,85 @@ export function findMultiTenantCandidates(
   groups.sort((a, b) => b.totalObjects - a.totalObjects);
 
   return groups;
+}
+
+/**
+ * Finds shards with zero objects across all nodes.
+ *
+ * Multi-tenant collections are skipped via `skipCollections` because individual
+ * tenant shards start empty by design and would generate false positives.
+ *
+ * @param nodes           Verbose cluster node data.
+ * @param skipCollections Collection names to exclude (e.g. MT-enabled ones).
+ */
+export function findEmptyShards(
+  nodes: NodeLike[],
+  skipCollections?: Set<string>
+): EmptyShardEntry[] {
+  const result: EmptyShardEntry[] = [];
+  for (const node of nodes) {
+    for (const shard of node.shards ?? []) {
+      if (skipCollections?.has(shard.class)) {
+        continue;
+      }
+      if (shard.objectCount === 0) {
+        result.push({
+          collectionName: shard.class,
+          nodeName: node.name,
+          shardName: shard.name,
+        });
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * Finds collections whose shards have inconsistent object counts across replicas.
+ *
+ * When the same shard name appears on multiple nodes (replication factor > 1)
+ * with different object counts, it may indicate async replication is disabled
+ * or lagging behind.
+ *
+ * Note: object counts in node status are not immediately synchronised and may
+ * be slightly delayed, so small short-lived discrepancies are expected.
+ */
+export function findReplicationImbalances(nodes: NodeLike[]): ReplicationImbalanceCollection[] {
+  // collectionName → shardName → replicas
+  const byCollection = new Map<string, Map<string, ShardReplica[]>>();
+
+  for (const node of nodes) {
+    for (const shard of node.shards ?? []) {
+      if (!byCollection.has(shard.class)) {
+        byCollection.set(shard.class, new Map());
+      }
+      const byShardName = byCollection.get(shard.class)!;
+      if (!byShardName.has(shard.name)) {
+        byShardName.set(shard.name, []);
+      }
+      byShardName.get(shard.name)!.push({ nodeName: node.name, objectCount: shard.objectCount });
+    }
+  }
+
+  const result: ReplicationImbalanceCollection[] = [];
+
+  for (const [collectionName, byShardName] of byCollection) {
+    const imbalanced: ImbalancedShard[] = [];
+    for (const [shardName, replicas] of byShardName) {
+      if (replicas.length < 2) {
+        continue; // single replica — nothing to compare
+      }
+      const first = replicas[0].objectCount;
+      if (replicas.some((r) => r.objectCount !== first)) {
+        imbalanced.push({ shardName, replicas });
+      }
+    }
+    if (imbalanced.length > 0) {
+      result.push({ collectionName, shards: imbalanced });
+    }
+  }
+
+  return result;
 }
 
 /**
